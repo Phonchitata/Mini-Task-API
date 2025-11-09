@@ -1,6 +1,6 @@
 const bcrypt = require('bcrypt');
 const prisma = require('../config/prisma');
-const { v4: uuidv4 } = require('uuid');
+const { randomUUID } = require('crypto');
 const jwt = require('jsonwebtoken');
 const {
   generateAccessToken,
@@ -31,7 +31,7 @@ async function login(req, res, next) {
     const match = await bcrypt.compare(password, user.password);
     if (!match) return res.status(401).json({ error: { code: 'INVALID_CREDENTIALS', message: 'Invalid email or password' } });
 
-    const tokenId = uuidv4();
+    const tokenId = randomUUID();
     const accessToken = generateAccessToken(user);
     const refreshTokenStr = generateRefreshToken(user, tokenId);
 

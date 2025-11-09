@@ -5,8 +5,32 @@ const abac = require('../../middleware/abac');
 const idempotency = require('../../middleware/idempotency');
 
 /**
- * ✅ GET : แสดงรายการงานทั้งหมด
- * เงื่อนไข: แสดงเฉพาะงานที่เป็น public หรือเป็นเจ้าของ หรือ admin เท่านั้น
+ * @openapi
+ * /api/v2/tasks:
+ *   get:
+ *     summary: Get all tasks visible to current user
+ *     description: Returns tasks that are public or owned by the current user (or admin).
+ *     tags:
+ *       - Tasks v2
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: OK - list of tasks
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 type: object
+ *                 properties:
+ *                   id: { type: string }
+ *                   title: { type: string }
+ *                   description: { type: string }
+ *                   status: { type: string }
+ *                   priority: { type: string }
+ *                   isPublic: { type: boolean }
+ *                   ownerId: { type: string }
  */
 router.get('/', authenticate, async (req, res, next) => {
   try {
@@ -27,7 +51,41 @@ router.get('/', authenticate, async (req, res, next) => {
 });
 
 /**
- * ✅ POST : สร้างงานใหม่ (รองรับ Idempotency-Key)
+ * @openapi
+ * /api/v2/tasks:
+ *   post:
+ *     summary: Create a new task (idempotent)
+ *     description: Create a new task. If Idempotency-Key header is provided and already used, returns the cached result.
+ *     tags:
+ *       - Tasks v2
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: header
+ *         name: Idempotency-Key
+ *         required: false
+ *         schema:
+ *           type: string
+ *         description: Unique key to make the request idempotent
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - title
+ *             properties:
+ *               title: { type: string }
+ *               description: { type: string }
+ *               priority:
+ *                 type: string
+ *                 enum: [low, medium, high]
+ *     responses:
+ *       201:
+ *         description: Task created
+ *       400:
+ *         description: Missing or invalid fields
  */
 router.post('/', authenticate, idempotency, async (req, res, next) => {
   try {
@@ -51,7 +109,41 @@ router.post('/', authenticate, idempotency, async (req, res, next) => {
 });
 
 /**
- * ✅ ABAC Policy : เจ้าของหรือ admin เท่านั้นที่แก้ไขงานได้
+ * @openapi
+ * /api/v2/tasks/{id}/status:
+ *   patch:
+ *     summary: Update task status (owner or admin only)
+ *     description: Only the task owner or admin can update task status.
+ *     tags:
+ *       - Tasks v2
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Task ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - status
+ *             properties:
+ *               status:
+ *                 type: string
+ *                 enum: [pending, in_progress, completed]
+ *     responses:
+ *       200:
+ *         description: Task status updated successfully
+ *       400:
+ *         description: Invalid status
+ *       403:
+ *         description: Forbidden - ABAC policy denied
  */
 const canAccessTask = async (req) => {
   const task = await prisma.task.findUnique({ where: { id: req.params.id } });
@@ -59,9 +151,6 @@ const canAccessTask = async (req) => {
   return task.ownerId === req.user.userId || req.user.role === 'admin';
 };
 
-/**
- * ✅ PATCH : แก้สถานะงาน (เฉพาะเจ้าของหรือ admin)
- */
 router.patch('/:id/status', authenticate, abac(canAccessTask), async (req, res, next) => {
   try {
     const { status } = req.body;

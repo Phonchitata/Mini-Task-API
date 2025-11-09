@@ -32,6 +32,11 @@ app.use('/api/v1/users', v1Users);
 app.use('/api/v2/tasks', v2Tasks);
 app.use('/api/v1/auth', v1Auth);
 
+const swaggerUi = require('swagger-ui-express');
+const swaggerSpec = require('./docs/swagger');
+
+app.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+
 // 7) Error handler
 const errorHandler = require('./middleware/errorHandler');
 app.use(errorHandler);
