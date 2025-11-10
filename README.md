@@ -1,26 +1,26 @@
-# Mini Task API
+# 🧩 Mini Task API
 
-A RESTful API for managing tasks with user authentication, RBAC/ABAC access control, idempotency, and rate limiting. Built with **Node.js + Express + Prisma + MySQL**, and documented using **Swagger (OpenAPI 3.0)**.
+A modern RESTful API for managing tasks with **JWT authentication**, **RBAC/ABAC authorization**, **idempotent POST requests**, and **role-based rate limiting**.  
+Built with **Node.js + Express + Prisma + MySQL**, documented via **Swagger (OpenAPI 3.0)**.
 
 ---
 
-## 1. System Setup
+## 🚀 1. Setup & Installation
 
 ### 1.1 Prerequisites
-
-* Node.js v18+ (recommended v20+)
-* MySQL 8.0
-* Docker (optional, for MySQL + phpMyAdmin)
+- Node.js v18+ (recommended v20+)
+- MySQL 8.0+
+- Docker (optional for local DB)
+- npm or yarn
 
 ### 1.2 Installation
-
 ```bash
 npm install
 ```
 
-### 1.3 Environment Variables
+### 1.3 Environment Configuration
 
-Create a file `.env` in the project root:
+Create `.env` in the project root:
 
 ```env
 PORT=3000
@@ -31,136 +31,143 @@ JWT_REFRESH_SECRET=change-me-too
 JWT_ACCESS_EXPIRES=15m
 JWT_REFRESH_EXPIRES=7d
 IDEMPOTENCY_TTL_HOURS=24
+TRUST_PROXY=false
 ```
 
-### 1.4 Database Setup
+> Example template is provided in `.env.example`.
+
+---
+
+## 🗄️ 2. Database Setup
 
 ```bash
 npx prisma migrate dev --name init
 npx prisma generate
 ```
 
-### 1.5 Run Development Server
+To view your database:
+```bash
+npx prisma studio
+```
+
+---
+
+## 🧪 3. Development Server
 
 ```bash
 npm run dev
 ```
 
-Check: [http://localhost:3000/health](http://localhost:3000/health) → `{ ok: true }`
-
----
-
-## 2. Testing Setup
-
-### 2.1 Create `.env.test`
-
-```env
-PORT=3100
-NODE_ENV=test
-DATABASE_URL="mysql://root:password@localhost:3306/minitaskdb_test"
-JWT_ACCESS_SECRET=test-access-secret
-JWT_REFRESH_SECRET=test-refresh-secret
-JWT_ACCESS_EXPIRES=15m
-JWT_REFRESH_EXPIRES=7d
-IDEMPOTENCY_TTL_HOURS=24
+Health check endpoint:
 ```
-
-### 2.2 Run Tests
-
-```bash
-npm test
+GET http://localhost:3000/health → { "ok": true }
 ```
 
 ---
 
-## 3. Core Features
+## 🔐 4. Authentication (JWT)
 
-### Authentication (v1)
+### Token Types
+| Type | Lifetime | Example Payload |
+|------|-----------|------------------|
+| **Access Token** | 15 minutes | `{ "userId": "123", "email": "user@email.com", "role": "user", "isPremium": false }` |
+| **Refresh Token** | 7 days | `{ "userId": "123", "tokenId": "uuid-12345" }` |
 
-| Method | Endpoint              | Description                            |
-| ------ | --------------------- | -------------------------------------- |
-| POST   | /api/v1/auth/register | Register new user                      |
-| POST   | /api/v1/auth/login    | Login and receive access/refresh token |
-| POST   | /api/v1/auth/refresh  | Refresh access token                   |
-| POST   | /api/v1/auth/logout   | Logout and revoke refresh token        |
+### Flow
+1. **Register** → Create user + hash password (bcrypt)
+2. **Login** → Validate + issue access & refresh tokens
+3. **Access API** → Send access token in header
+4. **Refresh** → Use refresh token to get new access token
+5. **Logout** → Blacklist both tokens
 
-### Users (v1)
-
-| Method | Endpoint         | Description                     |
-| ------ | ---------------- | ------------------------------- |
-| GET    | /api/v1/users/me | View own profile                |
-| PUT    | /api/v1/users/me | Update profile                  |
-| DELETE | /api/v1/users/me | Delete account (cascades tasks) |
-
-### Tasks (v1)
-
-| Method | Endpoint          | Description             |
-| ------ | ----------------- | ----------------------- |
-| GET    | /api/v1/tasks     | List tasks (basic RBAC) |
-| POST   | /api/v1/tasks     | Create new task         |
-| PUT    | /api/v1/tasks/:id | Update task             |
-| DELETE | /api/v1/tasks/:id | Delete task             |
-
-### Tasks (v2)
-
-| Method | Endpoint                 | Description                               |
-| ------ | ------------------------ | ----------------------------------------- |
-| GET    | /api/v2/tasks            | View visible tasks (public, owner, admin) |
-| POST   | /api/v2/tasks            | Create new task (with Idempotency-Key)    |
-| PATCH  | /api/v2/tasks/:id/status | Update status (ABAC policy)               |
-
-Authorization Header:
-
+Authorization header example:
 ```
 Authorization: Bearer <accessToken>
 ```
 
 ---
 
-## 4. Key Middleware
+## 🧍 5. User Endpoints (v1)
 
-### 4.1 ABAC (Attribute-Based Access Control)
+| Method | Endpoint | Description |
+|--------|-----------|-------------|
+| POST | /api/v1/auth/register | Register new user |
+| POST | /api/v1/auth/login | Login and get tokens |
+| POST | /api/v1/auth/refresh | Refresh access token |
+| POST | /api/v1/auth/logout | Logout and revoke tokens |
+| GET | /api/v1/users/me | View profile |
+| PUT | /api/v1/users/me | Update profile |
+| DELETE | /api/v1/users/me | Delete account |
+| GET | /api/v1/users | List all users (admin only) |
 
-* Allows access based on user and resource attributes.
-* Example rule (in v2 tasks): only owner or admin can update task.
+---
 
-```js
-const canAccessTask = async (req) => {
-  const task = await prisma.task.findUnique({ where: { id: req.params.id } });
-  return task && (task.ownerId === req.user.userId || req.user.role === 'admin');
-};
-```
+## ✅ 6. Task Endpoints
 
-### 4.2 Idempotency
+### (v1) Basic RBAC
+| Method | Endpoint | Description |
+|--------|-----------|-------------|
+| GET | /api/v1/tasks | List tasks |
+| POST | /api/v1/tasks | Create new task |
+| PUT | /api/v1/tasks/:id | Update task |
+| PATCH | /api/v1/tasks/:id/status | Update task status |
+| DELETE | /api/v1/tasks/:id | Delete task |
 
-Ensures `POST /api/v2/tasks` cannot create duplicate records if the same `Idempotency-Key` is sent twice.
+### (v2) Enhanced ABAC + Idempotency
+| Method | Endpoint | Description |
+|--------|-----------|-------------|
+| GET | /api/v2/tasks | List visible tasks (ABAC filters) |
+| POST | /api/v2/tasks | Create task (idempotent) |
+| PATCH | /api/v2/tasks/:id/status | Update status |
+| PUT | /api/v2/tasks/:id | Update (owner/admin only) |
+| DELETE | /api/v2/tasks/:id | Delete (owner/admin only) |
 
-Header example:
-
+Header for idempotent requests:
 ```
 Idempotency-Key: create-task-001
 ```
 
-### 4.3 Rate Limiter
+---
 
-Configured via `src/middleware/rateLimiter.js`:
+## 🧠 7. ABAC Rules
 
-```js
-const rateLimit = require('express-rate-limit');
-const limiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 30,
-  message: { error: { code: 'RATE_LIMIT', message: 'Too many requests' } }
-});
-```
-
-Applied globally in `app.js`.
+| Action | Allowed If |
+|---------|-------------|
+| **Read Task** | `task.isPublic == true` OR `user.id == task.ownerId` OR `user.id == task.assignedTo` OR `user.role == 'admin'` |
+| **Update/Delete Task** | `user.id == task.ownerId` OR `user.role == 'admin'` |
+| **Create High Priority Task** | `user.isPremium == true` OR `user.role == 'admin'` |
+| **Time-Based Access** | `user.isPremium == true` AND `user.subscriptionExpiry > Date.now()` |
 
 ---
 
-## 5. Error Format
+## 🚦 8. Rate Limiting
 
-All errors follow the same structure:
+Implemented in `src/middleware/rateLimiter.js`  
+Each role has its own per-minute request limit.
+
+| Role | Limit (per minute) |
+|------|---------------------|
+| Anonymous | 3 |
+| User | 5 |
+| Premium | 8 |
+
+Custom response (HTTP 429):
+
+```json
+{
+  "error": {
+    "code": "RATE_LIMIT_EXCEEDED",
+    "message": "Too many requests. Try again in 60 seconds.",
+    "retryAfter": 60
+  }
+}
+```
+
+---
+
+## 🧩 9. Error Format
+
+All error responses follow this structure:
 
 ```json
 {
@@ -168,7 +175,7 @@ All errors follow the same structure:
     "code": "INVALID_STATUS",
     "message": "Invalid task status",
     "details": null,
-    "timestamp": "2025-11-10T09:41:00.000Z",
+    "timestamp": "2025-11-11T10:00:00Z",
     "path": "/api/v2/tasks/123/status"
   }
 }
@@ -176,50 +183,21 @@ All errors follow the same structure:
 
 ---
 
-## 6. Swagger API Docs
+## 📘 10. Swagger Documentation
 
-### 6.1 Install
+Accessible at:  
+👉 **[http://localhost:3000/docs](http://localhost:3000/docs)**
 
-```bash
-npm i swagger-ui-express swagger-jsdoc
-```
-
-### 6.2 Config (`src/docs/swagger.js`)
-
-```js
-const swaggerJSDoc = require('swagger-jsdoc');
-const options = {
-  definition: {
-    openapi: '3.0.0',
-    info: { title: 'Mini Task API', version: '2.0.0' },
-    servers: [{ url: 'http://localhost:3000' }],
-    components: {
-      securitySchemes: {
-        bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' }
-      }
-    },
-    security: [{ bearerAuth: [] }]
-  },
-  apis: ['src/routes/**/*.js']
-};
-module.exports = swaggerJSDoc(options);
-```
-
-### 6.3 Integrate in `app.js`
-
+Generated via:
 ```js
 const swaggerUi = require('swagger-ui-express');
 const swaggerSpec = require('./docs/swagger');
 app.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 ```
 
-Open: **[http://localhost:3000/docs](http://localhost:3000/docs)**
-
 ---
 
-## 7. Docker Compose
-
-Example file:
+## 🐳 11. Docker Compose (Optional)
 
 ```yaml
 version: "3.9"
@@ -255,15 +233,16 @@ volumes:
 
 ---
 
-## 8. Useful Tips
+## 🧰 12. Developer Tips
 
-* Use `crypto.randomUUID()` instead of `uuid` (to avoid ESM errors).
-* Maintain `.env.example` for shared configuration.
-* Add `onDelete: Cascade` in Prisma schema for user-task relations.
-* Run `npx prisma studio` for visual DB management.
+- Use `crypto.randomUUID()` for unique IDs.
+- Keep `.env.example` updated for team consistency.
+- Use Prisma’s `onDelete: Cascade` for User–Task relations.
+- RateLimiter role detection relies on `req.user.role`.
 
 ---
 
-**Author:** Kawinphop Suwatwisutthikhun
-**Version:** 2.0.0
-**License:** MIT
+**Author:** Kawinphop Suwatwisutthikhun  
+**Version:** 2.0.0  
+**License:** MIT  
+**Last Updated:** 2025-11-11
