@@ -15,23 +15,112 @@ function parseIdParam(req, res, next) {
   next();
 }
 
+const asBool = (v) => {
+  if (typeof v === 'boolean') return v;
+  if (typeof v === 'string') {
+    const s = v.toLowerCase();
+    if (s === 'true') return true;
+    if (s === 'false') return false;
+  }
+  return undefined;
+};
+
+function parseSort(sortStr) {
+  const fallback = { createdAt: 'desc' };
+  if (!sortStr || typeof sortStr !== 'string') return fallback;
+
+  const [fieldRaw, dirRaw] = sortStr.split(':');
+  const field = (fieldRaw || '').trim();
+  const dir = (dirRaw || 'asc').toLowerCase();
+
+  const allowFields = new Set(['createdAt', 'updatedAt', 'title', 'priority', 'status']);
+  const allowDirs = new Set(['asc', 'desc']);
+
+  if (!allowFields.has(field) || !allowDirs.has(dir)) return fallback;
+  return { [field]: dir };
+}
+
 /**
  * @openapi
  * /api/v2/tasks:
  *   get:
- *     summary: Get all tasks visible to current user
+ *     summary: Get all tasks visible to current user (supports filtering, sorting, pagination)
  *     tags: [Tasks v2]
- *     security: [ bearerAuth: [] ]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: status
+ *         schema: { type: string, enum: [pending, in_progress, completed] }
+ *       - in: query
+ *         name: priority
+ *         schema: { type: string, enum: [low, medium, high] }
+ *       - in: query
+ *         name: assignedTo
+ *         schema: { type: integer, nullable: true }
+ *       - in: query
+ *         name: isPublic
+ *         schema: { type: boolean }
+ *       - in: query
+ *         name: sort
+ *         schema:
+ *           type: string
+ *           example: createdAt:desc
+ *           description: "Field:direction (createdAt|updatedAt|title|priority|status) : (asc|desc)"
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer, minimum: 1, default: 1 }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, minimum: 1, maximum: 100, default: 10 }
  *     responses:
- *       200: { description: OK - list of tasks }
+ *       200:
+ *         description: OK - list of tasks
  */
 router.get('/', authenticate, async (req, res, next) => {
   try {
     const isAdmin = req.user?.role === 'admin';
-    const where = isAdmin ? {} : { OR: [{ isPublic: true }, { ownerId: req.user.userId }] };
-    const tasks = await prisma.task.findMany({ where, orderBy: { createdAt: 'desc' } });
-    res.json(tasks);
-  } catch (err) { next(err); }
+
+    const { status, priority } = req.query;
+    const assignedTo = req.query.assignedTo ? Number(req.query.assignedTo) : undefined;
+    const isPublic = asBool(req.query.isPublic);
+    const orderBy = parseSort(req.query.sort);
+
+    const page = Math.max(1, Number(req.query.page || 1));
+    const limit = Math.max(1, Math.min(100, Number(req.query.limit || 10)));
+    const skip = (page - 1) * limit;
+    const take = limit;
+
+    const where = {
+      ...(status ? { status } : {}),
+      ...(priority ? { priority } : {}),
+      ...(Number.isInteger(assignedTo) ? { assignedTo } : {}),
+      ...(typeof isPublic === 'boolean' ? { isPublic } : {}),
+      ...(!isAdmin
+        ? { OR: [{ isPublic: true }, { ownerId: req.user.userId }] }
+        : {}),
+    };
+
+    const [items, total] = await Promise.all([
+      prisma.task.findMany({
+        where,
+        orderBy,
+        skip,
+        take,
+      }),
+      prisma.task.count({ where }),
+    ]);
+
+    res.json({
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit),
+      items,
+    });
+  } catch (err) {
+    next(err);
+  }
 });
 
 /**
@@ -39,8 +128,9 @@ router.get('/', authenticate, async (req, res, next) => {
  * /api/v2/tasks:
  *   post:
  *     summary: Create a new task (idempotent with Idempotency-Key)
+ *     description: Re-sending with the same Idempotency-Key and identical payload returns the cached response within 24h.
  *     tags: [Tasks v2]
- *     security: [ bearerAuth: [] ]
+ *     security: [ { bearerAuth: [] } ]
  *     parameters:
  *       - in: header
  *         name: Idempotency-Key
@@ -71,7 +161,7 @@ router.post('/', authenticate, idempotency, async (req, res, next) => {
       data: {
         title,
         description,
-        priority: ['low','medium','high'].includes(priority) ? priority : 'medium',
+        priority: ['low', 'medium', 'high'].includes(priority) ? priority : 'medium',
         isPublic: typeof isPublic === 'boolean' ? isPublic : false,
         ownerId: req.user.userId
       }
@@ -86,7 +176,7 @@ router.post('/', authenticate, idempotency, async (req, res, next) => {
  *   get:
  *     summary: Get task by id (full)
  *     tags: [Tasks v2]
- *     security: [ bearerAuth: [] ]
+ *     security: [ { bearerAuth: [] } ]
  *     parameters:
  *       - in: path
  *         name: id
@@ -118,7 +208,7 @@ const canAccessTask = async (req) => {
  *   put:
  *     summary: Update task (full update, full response)
  *     tags: [Tasks v2]
- *     security: [ bearerAuth: [] ]
+ *     security: [ { bearerAuth: [] } ]
  *     parameters:
  *       - in: path
  *         name: id
@@ -140,20 +230,17 @@ const canAccessTask = async (req) => {
  *               assignedTo: { type: integer, nullable: true }
  *     responses:
  *       200: { description: Updated }
- *       400: { description: Invalid payload }
- *       403: { description: Forbidden }
  */
 router.put('/:id', parseIdParam, authenticate, abac(canAccessTask), async (req, res, next) => {
   try {
     const { title, description, priority, status, isPublic, assignedTo } = req.body;
     if (!title) return res.status(400).json({ error: { code: 'MISSING_FIELD', message: 'Title is required' } });
-    if (priority && !['low','medium','high'].includes(priority)) {
+    if (priority && !['low', 'medium', 'high'].includes(priority)) {
       return res.status(400).json({ error: { code: 'INVALID_PRIORITY', message: 'Invalid task priority' } });
     }
-    if (status && !['pending','in_progress','completed'].includes(status)) {
+    if (status && !['pending', 'in_progress', 'completed'].includes(status)) {
       return res.status(400).json({ error: { code: 'INVALID_STATUS', message: 'Invalid task status' } });
     }
-
     const updated = await prisma.task.update({
       where: { id: req.params.id },
       data: {
@@ -175,7 +262,7 @@ router.put('/:id', parseIdParam, authenticate, abac(canAccessTask), async (req, 
  *   delete:
  *     summary: Delete task
  *     tags: [Tasks v2]
- *     security: [ bearerAuth: [] ]
+ *     security: [ { bearerAuth: [] } ]
  *     parameters:
  *       - in: path
  *         name: id
@@ -183,7 +270,6 @@ router.put('/:id', parseIdParam, authenticate, abac(canAccessTask), async (req, 
  *         schema: { type: integer }
  *     responses:
  *       200: { description: Deleted }
- *       403: { description: Forbidden }
  */
 router.delete('/:id', parseIdParam, authenticate, abac(canAccessTask), async (req, res, next) => {
   try {
@@ -199,7 +285,7 @@ router.delete('/:id', parseIdParam, authenticate, abac(canAccessTask), async (re
  *     summary: Update task status (owner or admin only)
  *     description: Idempotent by nature. No Idempotency-Key required.
  *     tags: [Tasks v2]
- *     security: [ bearerAuth: [] ]
+ *     security: [ { bearerAuth: [] } ]
  *     parameters:
  *       - in: path
  *         name: id
@@ -220,7 +306,7 @@ router.delete('/:id', parseIdParam, authenticate, abac(canAccessTask), async (re
 router.patch('/:id/status', parseIdParam, authenticate, abac(canAccessTask), async (req, res, next) => {
   try {
     const { status } = req.body;
-    if (!['pending','in_progress','completed'].includes(status)) {
+    if (!['pending', 'in_progress', 'completed'].includes(status)) {
       return res.status(400).json({ error: { code: 'INVALID_STATUS', message: 'Invalid task status' } });
     }
     const updated = await prisma.task.update({
